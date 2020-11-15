@@ -1,0 +1,687 @@
+---
+title: "Diamond data analysis"
+output: html_notebook
+---
+##   The breakdown of this project
+######        ********************************************************************************************************************************************
+###   Introduction
+#### 1.	Objective: training models using the classical diamond dataset and predicting the total price of 5000 diamonds for our client who wanted to bid at an auction.
+#### 2.	Context of the classical diamond dataset
+##### 1)	Size:  around 50,000 rows
+##### 2)	Variables:
+#####     price in US dollars ($326--$18,823)
+#####     carat weight of the diamond (0.2--5.01)
+#####     cut quality of the cut (Fair, Good, Very Good, Premium, Ideal)
+#####     color diamond color, from J (worst) to D (best)
+#####     clarity a measurement of how clear the diamond is (I1 (worst), SI2, SI1, VS2, VS1, VVS2, VVS1, IF(best))
+#####     x length in mm (0--10.74)
+#####     y width in mm (0--58.9)
+#####     z depth in mm (0--31.8)
+#####     depth total depth percentage = z / mean(x, y) 
+#####     table width of top of diamond relative to widest point 
+#####  3.	New diamond dataset provided by the client
+###   Import libraries
+###   Load datasets
+###   EDA and Data Preprocessing
+####  Categorical variables
+##### 1.	EDA
+##### 2.	Create indicators for each level of each categorical variable
+####  Numeric variables
+##### 1.	Distributions
+##### 2.	Correlation plot
+##### 3.	Exclusion of outliers
+##### 4.	Drop x, y, z
+###   New features, index_1 and index_2
+###   Transformation
+###    Models
+####  1.	Decision Tree
+####  2.	Random Forest
+####  3.	Xgboost
+### Prediction
+### Conclusion
+######             ********************************************************************************************************************************************
+
+## Import Libraries
+```{r}
+library(dplyr)
+library(rpart)
+library(ggplot2)
+library(corrplot)
+library(randomForest)
+library(tree)
+library(neuralnet)
+library(xgboost)
+library(caret)
+library(modelr)
+library(rpart)
+library(GGally) ## ggpairs
+library(gridExtra) ## arrange plots 
+library(ggcorrplot)
+
+```
+
+## Load datasets
+
+```{r}
+setwd("E://study//TAMU//685//practice using R")
+
+## the dataset for models training
+diamond_raw=read.csv("main_diamond.csv")
+
+## The dataset containing 5000 rows of new diamonds which will be predicted
+diamond_new=read.csv("new_diamond.csv")
+```
+
+#### A quick view of dataset
+
+```{r}
+head(diamond_raw)
+```
+
+#### Overview of dataset
+
+```{r}
+summary(diamond_raw)
+
+str(diamond_raw)
+```
+## EDA and Data Preprocessing
+
+### Categorical variables
+
+#### EDA of the three categorical variables
+
+```{r}
+
+theme_set(theme_classic())
+
+# plot the counts of cut on each level
+diamond_raw$cut<-factor(diamond_raw$cut, levels=c("Fair","Good","Very Good","Premium","Ideal"))
+p1<-ggplot(data=diamond_raw, aes(x=cut,fill=cut))+geom_bar( )+theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+# plot the counts of clarity on each level
+diamond_raw$clarity<-factor(diamond_raw$clarity, levels=c("I1","SI1","SI2","VS1","VS2","VVS1","VVS2","IF"))
+p2<-ggplot(data=diamond_raw)+geom_bar(mapping = aes(x=clarity,fill=clarity))+theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+# plot the counts of color on each level
+p3<-ggplot(data=diamond_raw)+geom_bar(mapping = aes(x=color,fill=color))+theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+
+grid.arrange(p1, p2, p3, ncol=2)
+```
+```{r}
+### The relationship between three categorical varibables and price
+
+## boxplot of cut
+g1<-ggplot(data=diamond_raw,mapping=aes(x=cut, y=price))+
+  geom_boxplot(varwidth = TRUE, fill='plum') +theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+
+## boxplot of clarity
+g2<-ggplot(data=diamond_raw, mapping=aes(x=clarity, y=price))+
+  geom_boxplot(varwidth = TRUE, fill='blue')
+
+## boxplot of color
+g3<-ggplot(data=diamond_raw, mapping=aes(x=color, y=price))+
+  geom_boxplot(varwidth = TRUE, fill='green')
+
+  
+grid.arrange(g1,g2,g3, ncol=2)
+
+```
+
+#### The relationship between carat and price, including the effects of cut, clarity and color
+
+```{r}
+
+f1<-ggplot(data=diamond_raw,mapping=aes(x=carat, y=price,color=cut))+
+  geom_point(alpha=1/5) +geom_smooth(color="black")
+f1+facet_wrap(~ cut, ncol=3)
+
+```
+
+```{r}
+f2<-ggplot(data=diamond_raw, mapping=aes(x=carat, y=price,color=color))+
+  geom_point(alpha=1/5) +geom_smooth(color="black")
+f2+facet_wrap(~ color, ncol=4)
+```
+
+```{r}
+f3<-ggplot(data=diamond_raw, mapping=aes(x=carat, y=price,color=clarity))+
+  geom_point(alpha=1/5) +geom_smooth(color="black")
+f3+facet_wrap(~ clarity, ncol=4)
+```
+
+#### Create indicators for each level of each categorical variable
+
+```{r}
+# cut: Fair=1, Good=2, Very Good=3, Premium=4, Ideal=5
+cut_levels<-c("Fair", "Good","Very Good", "Premium","Ideal")
+diamond_raw[,'cut']<-factor(diamond_raw[,'cut'], levels=cut_levels)
+cut_2<-as.numeric(diamond_raw[,'cut'])
+
+# color: D=1, E=2, F=3, G=4,H=5,I=6,J=7
+color_levels<-c("D","E","F","G","H","I","J")
+diamond_raw[,'color']<-factor(diamond_raw[,'color'], levels=color_levels)
+color_2<-as.numeric(diamond_raw[,'color'])
+
+# clarity: I1=1, SI2=2, SI1=3, VS2=4, VS1=5, VVS2=6, VVS1=7, IF=8
+clarity_levels<-c("I1","SI2","SI1","VS2","VS1","VVS2","VVS1", "IF")
+diamond_raw[,'clarity']<-factor(diamond_raw[,'clarity'], levels=clarity_levels)
+clarity_2<-as.numeric(diamond_raw[,'clarity'])
+
+
+#### Mutate the tree new columns to diamond dataset
+diamond_raw<-diamond_raw %>% mutate(cut_2) %>% mutate(color_2)%>% mutate(clarity_2)
+
+```
+
+
+### Numeric variables
+
+#### Correlation plot
+ 
+```{r}
+diamond_num<-diamond_raw %>% select(-c('cut', 'clarity', 'color', 'id','cut_2', 'clarity_2', 'color_2'))
+corrplot(cor(diamond_num), method="number")
+
+```
+
+#### The distributions of all numeric predictors
+
+```{r}
+c1<-ggplot(data=diamond_raw,mapping = aes(x=carat))+geom_histogram(fill='grey', col='black', binwidth = 0.5)
+x1<-ggplot(data=diamond_raw,mapping = aes(x=x))+geom_histogram(fill='grey',col='black', binwidth = 0.5)
+y1<-ggplot(data=diamond_raw,mapping = aes(x=y))+geom_histogram(fill='grey', col='black', binwidth = 0.5)+
+  coord_cartesian(ylim=c(0,50))
+z1<-ggplot(data=diamond_raw,mapping = aes(x=z))+geom_histogram(fill='grey', col='black', binwidth = 0.5)+
+  coord_cartesian(ylim=c(0,50))
+t1<-ggplot(data=diamond_raw,mapping = aes(x=table))+geom_histogram(fill='grey', col='black', binwidth = 2)+
+  coord_cartesian(ylim=c(0,50))
+d1<-ggplot(data=diamond_raw,mapping = aes(x=depth))+geom_histogram(fill='grey', col='black', binwidth = 2)+
+  coord_cartesian(ylim=c(0,50))
+
+grid.arrange(c1,x1,y1,z1,t1,d1, ncol=2)
+
+```
+
+#### check the couts fall in each bin
+
+```{r, echo=FALSE}
+table_c<-diamond_raw %>%
+ count(cut_width(carat, 0.5))
+len=length(table_c[,1])
+table_c<-setNames(data.frame(seq(1, 11),table_c[,1], table_c[,2]), c('ID', 'carat_bin', 'carat_n'))
+
+table_x<-diamond_raw %>%
+  count(cut_width(x,0.5))
+table_x<-setNames(data.frame(seq(1, 16),table_x[,1], table_x[,2]), c('ID', 'x_bin', 'x_n'))
+
+table_y<-diamond_raw %>%
+  count(cut_width(y,0.5))
+table_y<-setNames(data.frame(seq(1, 18),table_y[,1], table_y[,2]), c('ID', 'y_bin', 'y_n'))
+
+
+table_z<-diamond_raw %>%
+  count(cut_width(z,0.5))
+table_z<-setNames(data.frame(seq(1, 16),table_z[,1], table_z[,2]), c('ID', 'z_bin', 'z_n'))
+
+table_t<-diamond_raw %>%
+  count(cut_width(table,2))
+table_t<-setNames(data.frame(seq(1, 17),table_t[,1], table_t[,2]), c('ID', 'table_bin', 'table_n'))
+
+table_d<-diamond_raw %>%
+  count(cut_width(depth,2))
+table_d<-setNames(data.frame(seq(1, 15),table_d[,1], table_d[,2]), c('ID', 'depth_bin', 'depeth_n'))
+
+table_c %>% full_join(table_x, by='ID')  %>% full_join(table_y, by='ID') %>% full_join(table_z, by='ID') %>% full_join(table_t, by='ID')  %>% full_join(table_d, by='ID')
+```
+
+#### Exclusion of outliers 
+```{r}
+diamond<-diamond_raw %>%
+         filter(between(carat, 0.2, 4)) %>%      # carat:(0.2,4)
+         filter(between(x, 3.9,8.6)) %>%         # x:(3.9, 8.6)
+         filter(between(y, 3.9,8.5)) %>%         # y:(3.9,8.5)
+         filter(between(z, 2.4, 5.3)) %>%        # z:(2.4,5.3)
+         filter(between(table, 52, 66)) %>%      # table:(52,66)
+         filter(between(depth, 57, 67))          # depth:(57,67)
+```
+
+#### Drop x, y,and Z
+##### 1) x,y,z are higly multicollinearity, so it's better to drop x, y and z from the dataset
+##### 2) Since dept was calculated from x,y, z by the formula: depth=z/mean(x,y), depth only should give the enough imformation from x, y and z
+
+```{r}
+plot(diamond[, c('price',"x", "y", "z")])
+
+```
+
+```{r}
+# droop x, y and z
+diamond<- diamond %>% select(-c("x", "y", "z"))
+```
+
+#### New Features: index_1 and index_2
+##### seems there are least two seperate populations by plotting carat vs id
+```{r}
+carat_greaterthan_0.49=as.factor(ifelse(diamond$carat>0.49, "Yes", "No"))
+diamond <-data.frame(diamond, carat_greaterthan_0.49)
+diamond$carat_greaterthan_0.49=as.factor(diamond$carat_greaterthan_0.49)
+
+id_greaterthan_27750=as.factor(ifelse(diamond$id>27750, "Yes", "No"))
+diamond <-data.frame(diamond, id_greaterthan_27750)
+diamond$id_greaterthan_27750=as.factor(diamond$id_greaterthan_27750)
+
+# From the carat vs id plot, there seems at least two populations seperated by the values of id or carat
+s1<-ggplot(data=diamond, aes(x=id, y=carat))+
+geom_point(alpha=1/5 ) 
+
+s2<-ggplot(data=diamond, aes(x=id, y=carat, color=carat_greaterthan_0.49))+
+geom_point(alpha=1/5 ) 
+
+s3<-ggplot(data=diamond, aes(x=id, y=carat, color=id_greaterthan_27750))+
+geom_point(alpha=1/5 ) 
+
+grid.arrange(s1,s2,s3)
+
+```
+
+```{r}
+# create index_1 and index_2
+# If id < 27,751, index_1 = 1, otherwise index_1 = 0
+# If id < 27,751 and carat >0.49,  index_2 = 1, otherwise index_2 = 0
+
+n= length(diamond[,'id'])
+index_1<- rep(0, n)
+index_2<-rep(0, n)
+i=1
+j=1
+h=1
+for (i in 1: n){
+  if (diamond[i,'id'] < 27751)
+    index_1[i] = 1
+  else
+    index_1[i] = 0
+}
+
+for (j in 1: n){
+  if (diamond[j,'id'] < 27751 & diamond[j, 'carat']>0.49)
+    index_2[j] = 1
+  else
+    index_2[j] = 0
+}
+
+# Mutate the two index varaibles into the dataset
+diamond<-diamond %>% mutate(index_1) %>% mutate(index_2)
+```
+
+#### Plot carat vs id, colored by index_1 and index_2 respectively
+
+```{r}
+diamond2 <-data.frame(diamond, index_1)
+diamond2$index_1=as.factor(diamond$index_1)
+s4<-ggplot(data=diamond2, aes(x=id, y=carat, color=index_1))+
+geom_point(alpha=1/5 ) 
+
+diamond3 <-data.frame(diamond, index_2)
+diamond3$index_2=as.factor(diamond$index_2)
+s5<-ggplot(data=diamond3, aes(x=id, y=carat, color=index_2))+
+geom_point(alpha=1/5 ) 
+
+grid.arrange(s4,s5)
+```
+
+#### Plot price vs id, colored by index_1 and index_2 respectively
+
+```{r}
+
+s6<-ggplot(data=diamond2, aes(x=id, y=price, color=index_1))+geom_point()
+s7<-ggplot(data=diamond3, aes(x=id, y=price, color=index_2))+geom_point()
+
+grid.arrange(s6,s7)
+
+```
+
+### Transformation
+#### The nonlinear relationship between price and carat
+
+```{r}
+ggplot(data=diamond,mapping=aes(x=carat, y=price))+
+  geom_point(alpha=1/5) +geom_smooth()
+  
+```
+
+#### Log_transformation for price and carat
+
+```{r}
+ln_price=log2(diamond$price)
+ln_carat=log2(diamond$carat)
+diamond<-mutate(diamond,ln_price, ln_carat)
+
+## plot ln_price vs ln_carat
+ggplot(data=diamond,mapping=aes(x=ln_carat, y=ln_price))+
+  geom_point(alpha=1/5) +geom_smooth()
+  
+```
+
+
+```{r}
+## select only numeric variables for model training
+diamond<-diamond %>% select_if(is.numeric)
+
+# the structure of cleaned dataset
+str(diamond)
+```
+
+## Models
+
+#### Dependent variable: ln_price    predictors: in_carat, index_1/index_2,table, depth, cut_2, clarity_2 and color_2
+
+```{r}
+# split data into training and testing datasets
+set.seed(1000)
+train_index<-sample(1:nrow(diamond), nrow(diamond)*0.7)
+train<-diamond[train_index,]
+test<-diamond[-train_index,]
+
+```
+```{r}
+dim(train)
+dim(test)
+dim(diamond)
+```
+```{r}
+## fuction to get the maximum average error for tree models evaluation
+mae_values<-function(maxdepth, target, predictors, training_data, testing_data){
+  predictors <- paste(predictors, collapse="+")
+    formula <- as.formula(paste(target,"~",predictors,sep = ""))
+    tree_model <- rpart(formula, data = training_data,
+                   control = rpart.control(maxdepth = maxdepth))
+    # get the mae
+    mae <- mae(tree_model, testing_data)
+    
+    return(mae)
+}
+
+rmse_values<-function(maxdepth, target, predictors, training_data, testing_data){
+  predictors <- paste(predictors, collapse="+")
+    formula <- as.formula(paste(target,"~",predictors,sep = ""))
+    tree_model <- rpart(formula, data = training_data,
+                   control = rpart.control(maxdepth = maxdepth))
+    # get the mae
+   
+    rmse <- rmse(tree_model, testing_data)
+    return(rmse)
+}
+
+```
+
+### Decision Tree
+##### index_1 used as a predictor
+```{r}
+target<-'ln_price'
+predictors<-c('ln_carat', 'index_1','table', 'depth', 'cut_2', 'clarity_2', 'color_2')
+
+## for loop to get MAE between maxdepth=1 and maxdepth=10
+for (i in 1:10){
+  mae <- mae_values(maxdepth = i, target = target, predictors = predictors,
+                  training_data = train, testing_data =test)
+  rmse<-rmse_values(maxdepth = i, target = target, predictors = predictors,
+                  training_data = train, testing_data =test)
+    print(glue::glue("Maxdepth: ",i,"\t MAE: ",mae, "\t RMSE: ", rmse))
+}
+
+```
+
+##### index_2 used as a predictor
+```{r}
+target<-'ln_price'
+predictors<-c('ln_carat', 'index_2','table', 'depth', 'cut_2', 'clarity_2', 'color_2')
+
+## for loop to get MAE between maxdepth=1 and maxdepth=10
+for (i in 1:10){
+  mae <- mae_values(maxdepth = i, target = target, predictors = predictors,
+                  training_data = train, testing_data =test)
+  rmse<-rmse_values(maxdepth = i, target = target, predictors = predictors,
+                  training_data = train, testing_data =test)
+    print(glue::glue("Maxdepth: ",i,"\t MAE: ",mae, "\t RMSE: ", rmse))
+}
+
+```
+
+### RandomForest
+##### index_1 used as a predictor
+```{r}
+
+### fit a basic randomforest model, the default value of mtry=round(#number of predictors/3)
+rdf.model<-randomForest(ln_price~ln_carat+index_1+table+depth+cut_2+clarity_2+color_2, ntree=50, data=train)
+```
+```{r}
+## check the model details
+rdf.model
+```
+
+```{r}
+## check rmse (square root of mean squared error) and mae for the model on tetsing data
+rmse<-rmse(rdf.model, test)
+mae<-mae(rdf.model, test)
+print(glue::glue("rdf.model: ", "\t RMSE : ", rmse, "\t MAE : ", mae))
+```
+
+#### Use caret to tune the randomforest model
+##### !!! After run this tuning, I got the best model with mtry=4.
+```{r}
+#target<-train$ln_price
+#predictors<-train %>%
+  #select(c('ln_carat', 'index_1','table', 'depth', 'cut_2', 'clarity_2','color_2'))%>%
+  #as.matrix()
+#tuned_rdf.model<-train(x=predictors, y=target, ntree=50, method='rf', data=train)
+#print(tuned_rdf.model)
+
+```
+
+#### check the tuned radnomforest model with mtry=4 and ntree=50
+```{r}
+rdf.model_1<-randomForest(ln_price~ln_carat+index_1+table+depth+cut_2+clarity_2+color_2, ntree=50, mtry=4,data=train)
+```
+
+```{r}
+## check rmse (square root of mean squared error) and mae for the model on tetsing data
+rmse_1<-rmse(rdf.model_1, test)
+mae_1<-mae(rdf.model_1, test)
+print(glue::glue("rdf.model(index_1): ", "\t RMSE : ", rmse_1, "\t MAE : ", mae_1))
+```
+
+#### Plot the importance of predictors
+```{r}
+imp<-importance(rdf.model)
+imp_table<-data.frame(Variables=row.names(imp),imp_index=round(imp[, 'IncNodePurity'],5))
+
+```
+```{r }
+ggplot(imp_table, aes(x = reorder(Variables, imp_index), 
+                           y = imp_index, fill = imp_index)) +
+  geom_bar(stat='identity') + 
+  labs(x = 'Variables') +
+  coord_flip() + 
+  theme_classic()
+```
+
+#### index_2 used as a predictor
+```{r}
+rdf.model_2<-randomForest(ln_price~ln_carat+index_2+depth+table+cut_2+clarity_2+color_2, ntree=50, mtry=4,data=train)
+rmse_2<-rmse(rdf.model_2, test)
+mae_2<-mae(rdf.model_2, test)
+print(glue::glue("rdf.model(index_2): ", "\t RMSE : ", rmse_2, "\t MAE : ", mae_2))
+```
+
+### XGBoost modeling
+#### index_1 used as a predictor
+```{r}
+# matrix for modeling
+train_3_x<-train%>% select(-c('index_2','price','id','carat','ln_price'))
+train_3_x<-as.matrix(train_3_x)
+test_3_x<-test%>%select(-c('index_2','price','id','carat','ln_price'))
+test_3_x<-as.matrix(test_3_x)
+dtrain<-xgb.DMatrix(data=train_3_x, label=train$ln_price)
+dtest<-xgb.DMatrix(data=test_3_x, label=test$ln_price)
+
+# XGBoost parameters
+xgb_params<-list(colsample_bytree = 0.7,
+                 subsample = 0.7,
+                 booster = "gbtree",
+                  max_depth = 5,
+                 eta = 0.1,
+                 eval_metric = "rmse",
+                 objective = "reg:linear",
+                  gamma = 0)
+watchlist<-list(train=dtrain, test=dtest)
+# train xgboot model
+
+xgb_model<-xgb.train(xgb_params, dtrain, nrounds=200, watchlist = watchlist)
+
+```
+
+```{r}
+# Check the interaction for smallest test_rmse
+errors<-data.frame(xgb_model$evaluation_log)
+errors_1=errors[errors$test_rmse==min(errors$test_rmse),]
+errors_1
+```
+
+
+```{r}
+# The final XGBoost model with nrounds=200
+xgb_model_1<-xgb.train(xgb_params, dtrain, nrounds=200)
+```
+
+#### The importance of predictors
+
+```{r}
+imp<-xgb.importance(colnames(dtrain), model=xgb_model_1)
+xgb.plot.importance(imp)
+```
+#### index_2 used as a predictor
+```{r}
+# matrix for modeling
+train_3_x_2<-train%>% select(-c('index_1','price','id','carat','ln_price'))
+train_3_x_2<-as.matrix(train_3_x_2)
+test_3_x_2<-test%>%select(-c('index_1','price','id','carat','ln_price'))
+test_3_x_2<-as.matrix(test_3_x_2)
+dtrain<-xgb.DMatrix(data=train_3_x_2, label=train$ln_price)
+dtest<-xgb.DMatrix(data=test_3_x_2, label=test$ln_price)
+
+# XGBoost parameters
+xgb_params<-list(colsample_bytree = 0.7,
+                 subsample = 0.7,
+                 booster = "gbtree",
+                  max_depth = 5,
+                 eta = 0.1,
+                 eval_metric = "rmse",
+                 objective = "reg:linear",
+                  gamma = 0)
+watchlist<-list(train=dtrain, test=dtest)
+# train xgboot model
+xgb_model<-xgb.train(xgb_params, dtrain, nrounds=200, watchlist = watchlist)
+
+```
+
+```{r}
+# Check the interaction for smallest test_rmse
+errors<-data.frame(xgb_model$evaluation_log)
+errors_2=errors[errors$test_rmse==min(errors$test_rmse),]
+errors_2$test_rmse
+
+```
+
+```{r}
+# The final XGBoost model with nrounds=200
+xgb_model_2<-xgb.train(xgb_params, dtrain, nrounds=200)
+```
+
+###Summary the models
+```{r}
+print(glue::glue("rdf.model(index_1): ", "\t RMSE : ", rmse_1, "\t MAE : ", mae_1))
+print(glue::glue("rdf.model(index_2): ", "\t RMSE : ", rmse_2, "\t MAE : ", mae_2))
+print(glue::glue("xgb.model(index_1): ", "\t RMSE : ", errors_1$test_rmse ))
+print(glue::glue("xgb.model(index_2): ", "\t RMSE : ", errors_2$test_rmse))
+
+cat("\n Selected model: Xgboost with index_1 and nrounds =200")
+```
+
+## Prediction 
+
+```{r}
+# data preprocessing
+diamond_new<-diamond_new%>%
+  select_if(is.numeric)
+str(diamond_new)
+```
+
+### Use randomfroest model to predict index_1 for new diamond dataset
+
+```{r}
+
+train_3<-train%>%
+  select(-c('id','price','ln_price','index_2','carat'))
+
+
+train_3$index_1 <-as.factor(train_3$index_1)
+
+set.seed(100)
+  
+rdf<-randomForest(index_1~., ntree=100, mtry=3, data=train_3, importance=TRUE)
+
+
+### check the accurate 
+test_3<-test%>%
+  select(-c('id','price','ln_price','index_2','carat'))
+pred<-predict(rdf,test_3 )
+mean(pred==test_3$index_1)
+
+## use this model to predic index_1
+pred_index_1<-predict(rdf, diamond_new)
+index_1<-as.numeric(levels(pred_index_1))[pred_index_1]
+group3<-mutate(diamond_new, index_1)
+
+```
+
+### The XGBoost model for prediction
+```{r}
+
+dtrain3<-xgb.DMatrix(data=train_3_x, label=train$ln_price)
+
+group3_model<-xgb.train(xgb_params, dtrain3, nrounds=200)
+
+
+## create xgb.matrix for xgboost prediction
+ln_price<-rep(0, nrow(diamond_new))
+group3<-mutate(group3,ln_price)
+
+
+group3_x<-group3%>%select(-c('id','carat','ln_price'))
+
+### should keep the same order of feautures as that in the train data which you used for xgb model
+group3_x<-group3_x[,c('depth','table','cut_2','color_2','clarity_2','index_1','ln_carat')] 
+
+group3_x<-as.matrix(group3_x)
+Dgroup3<-xgb.DMatrix(data=group3_x, label=group3$ln_price)
+
+```
+
+
+```{r}
+## predict the price for the new diamond dataset
+ln_price_group3<-predict(group3_model, newdata=Dgroup3)
+
+## the prediction of total price
+total_3=sum(2^ln_price_group3)
+
+```
+
+### Summary the prediction
+
+```{r}
+print(glue::glue("Summary ", "\t Model: XGBoost ", "\t Total price of the 5299 diamond: ", total_3))
+```
